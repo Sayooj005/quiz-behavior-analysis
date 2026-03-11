@@ -2,6 +2,7 @@ import streamlit as st
 import time
 import pandas as pd
 import numpy as np
+import uuid
 from supabase import create_client
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -13,10 +14,9 @@ def get_client():
     key = st.secrets["SUPABASE_KEY"]
     return create_client(url, key)
 
-def generate_attempt_id(supabase):
-    response = supabase.table("quiz_responses").select("attempt_id").execute()
-    count = len(response.data)
-    return f"A{count:02}"
+def generate_attempt_id():
+    # UUID is unique for every user every time — no duplicates possible
+    return str(uuid.uuid4())[:8].upper()
 
 def save_to_supabase(supabase, row_dict):
     supabase.table("quiz_responses").insert(row_dict).execute()
@@ -90,7 +90,7 @@ total_questions = len(questions)
 supabase = get_client()
 
 if "attempt_id" not in st.session_state:
-    st.session_state.attempt_id = generate_attempt_id(supabase)
+    st.session_state.attempt_id = generate_attempt_id()
 
 if "current_q" not in st.session_state:
     st.session_state.current_q = 0
@@ -110,7 +110,7 @@ if "navigation_count" not in st.session_state:
 # ──────────────────────────────────────────────────────────────────────────────
 # UI
 # ──────────────────────────────────────────────────────────────────────────────
-st.title("Quiz")
+st.title(" Quiz")
 
 q_index = st.session_state.current_q
 question = questions[q_index]
@@ -155,38 +155,38 @@ with col2:
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Behavior Classification Rules
-# Priority order: Disengaged → Fast_Response → High_Revision → Deliberative
 # ──────────────────────────────────────────────────────────────────────────────
 def assign_behavior(avg_time, revision, navigation, accuracy, unattempted):
 
-
+    # Fast_Response
     if (
-        accuracy    < 0.4  or
-        unattempted >= 3   or
-        avg_time    < 4.0
-    ):
-        return "Disengaged"
-
-   
-    elif (
-        avg_time   < 8    and
-        revision   <= 1   and
-        navigation <= 3   and
+        avg_time < 8 and
+        revision <= 1 and
+        navigation <= 3 and
         0.4 <= accuracy <= 0.75 and
         unattempted <= 1
     ):
         return "Fast_Response"
 
+    # High_Revision
     elif (
-        avg_time   > 15  and
-        revision   >= 4  and
-        navigation >= 4  and
-        accuracy   >= 0.5 and
+        avg_time > 15 and
+        revision >= 4 and
+        navigation >= 4 and
+        accuracy >= 0.5 and
         unattempted <= 2
     ):
         return "High_Revision"
 
+    # Disengaged
+    elif (
+        accuracy < 0.4 or
+        unattempted >= 3 or
+        avg_time < 4
+    ):
+        return "Disengaged"
 
+    # Deliberative
     else:
         return "Deliberative"
 
