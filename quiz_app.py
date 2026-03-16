@@ -1,13 +1,10 @@
 import streamlit as st
 import time
-import pandas as pd
 import numpy as np
 import uuid
 from supabase import create_client
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Supabase Connection
-# ──────────────────────────────────────────────────────────────────────────────
+# --- Supabase Connection ---
 @st.cache_resource
 def get_client():
     url = st.secrets["SUPABASE_URL"]
@@ -20,9 +17,7 @@ def generate_attempt_id():
 def save_to_supabase(supabase, row_dict):
     supabase.table("quiz_responses").insert(row_dict).execute()
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Questions (10)
-# ──────────────────────────────────────────────────────────────────────────────
+# --- Questions ---
 questions = [
     {"q": "What is the time complexity of binary search on a sorted array?", "options": ["O(n)", "O(log n)", "O(n log n)", "O(1)"], "answer": "O(log n)"},
     {"q": "Which data structure follows the LIFO principle?", "options": ["Queue", "Stack", "Linked List", "Tree"], "answer": "Stack"},
@@ -38,50 +33,57 @@ questions = [
 
 total_questions = len(questions)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Initialize Session State
-# ──────────────────────────────────────────────────────────────────────────────
-supabase = get_client()
-
+# --- Session State ---
 if "attempt_id" not in st.session_state:
     st.session_state.attempt_id = generate_attempt_id()
-
 if "current_q" not in st.session_state:
     st.session_state.current_q = 0
-
-if "start_time" not in st.session_state:
-    st.session_state.start_time = time.time()
-
 if "answers" not in st.session_state:
     st.session_state.answers = {}
-
 if "revision_count" not in st.session_state:
     st.session_state.revision_count = 0
-
 if "navigation_count" not in st.session_state:
     st.session_state.navigation_count = 0
+if "quiz_start_time" not in st.session_state:
+    st.session_state.quiz_start_time = time.time()
+if "q_start_time" not in st.session_state:
+    st.session_state.q_start_time = time.time()
+if "question_durations" not in st.session_state:
+    # Pre-fill all 10 questions with 0.0 — ensures all are always present
+    st.session_state.question_durations = {i: 0.0 for i in range(total_questions)}
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Behavior Classification Rules 
-# ──────────────────────────────────────────────────────────────────────────────
+supabase = get_client()
+
+# --- Behavior Classification ---
 def assign_behavior(avg_time, revision, navigation, accuracy, unattempted):
     if unattempted >= 3:
         return "Disengaged"
-
     if avg_time < 12 and accuracy >= 0.75:
         return "Fast_Response"
-
     if avg_time < 7 and accuracy < 0.45:
         return "Disengaged"
-
     if revision >= 3 or navigation > (total_questions + 2):
         return "High_Revision"
-
     return "Deliberative"
 
-# ──────────────────────────────────────────────────────────────────────────────
-# UI
-# ──────────────────────────────────────────────────────────────────────────────
+# --- Duration Logging ---
+def log_duration():
+    elapsed = time.time() - st.session_state.q_start_time
+    idx = st.session_state.current_q
+    st.session_state.question_durations[idx] += elapsed
+    st.session_state.q_start_time = time.time()
+
+def next_question():
+    log_duration()
+    st.session_state.navigation_count += 1
+    st.session_state.current_q = (st.session_state.current_q + 1) % total_questions
+
+def previous_question():
+    log_duration()
+    st.session_state.navigation_count += 1
+    st.session_state.current_q = (st.session_state.current_q - 1) % total_questions
+
+# --- UI ---
 st.title("Quiz")
 
 q_index = st.session_state.current_q
@@ -105,36 +107,39 @@ if selected_answer is not None:
             st.session_state.revision_count += 1
     st.session_state.answers[q_index] = selected_answer
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Navigation
-# ──────────────────────────────────────────────────────────────────────────────
-def next_question():
-    st.session_state.navigation_count += 1
-    st.session_state.current_q = (st.session_state.current_q + 1) % total_questions
-
-def previous_question():
-    st.session_state.navigation_count += 1
-    st.session_state.current_q = (st.session_state.current_q - 1) % total_questions
-
 col1, col2 = st.columns(2)
-
 with col1:
     st.button("Previous", on_click=previous_question)
-
 with col2:
     st.button("Next", on_click=next_question)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Submit
-# ──────────────────────────────────────────────────────────────────────────────
+# --- Submit ---
 if st.button("Submit Quiz"):
+    log_duration()  # capture final time on last question
 
-    total_time = time.time() - st.session_state.start_time
-    avg_time = total_time / total_questions
+    total_duration = time.time() - st.session_state.quiz_start_time
+    avg_time = total_duration / total_questions
+
+    # ── Time Variance ─────────────────────────────────────────────────────────
+    durations = [st.session_state.question_durations[i] for i in range(total_questions)]
+
+    # If user never navigated (only on Q0), distribute equally → variance = 0.0
+    visited = [i for i in range(total_questions) if durations[i] > 0.0]
+    if len(visited) <= 1:
+        equal_share = total_duration / total_questions
+        durations = [equal_share] * total_questions
+
+    raw_variance = np.var(durations)
+
+    # Guard against NaN or Inf
+    if np.isnan(raw_variance) or np.isinf(raw_variance):
+        time_variance = 0.0
+    else:
+        time_variance = round(float(raw_variance), 2)
+    # ─────────────────────────────────────────────────────────────────────────
 
     correct_count = 0
     unattempted_count = 0
-
     for i, q in enumerate(questions):
         if i in st.session_state.answers:
             if st.session_state.answers[i] == q["answer"]:
@@ -152,14 +157,16 @@ if st.button("Submit Quiz"):
         unattempted_count
     )
 
+    # All values explicitly cast to Python native types — prevents NULL in Supabase
     save_to_supabase(supabase, {
-        "attempt_id":        st.session_state.attempt_id,
-        "avg_time":          round(avg_time, 2),
-        "revision_count":    st.session_state.revision_count,
-        "navigation_count":  st.session_state.navigation_count,
-        "unattempted_count": unattempted_count,
-        "accuracy":          round(accuracy, 2),
-        "behavior_label":    behavior_label
+        "attempt_id":        str(st.session_state.attempt_id),
+        "avg_time":          round(float(avg_time), 2),
+        "time_variance":     time_variance,
+        "revision_count":    int(st.session_state.revision_count),
+        "navigation_count":  int(st.session_state.navigation_count),
+        "unattempted_count": int(unattempted_count),
+        "accuracy":          round(float(accuracy), 2),
+        "behavior_label":    str(behavior_label)
     })
 
     st.success("Quiz Submitted Successfully!")
