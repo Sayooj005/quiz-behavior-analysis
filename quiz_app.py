@@ -76,44 +76,63 @@ if "quiz_start_time" not in st.session_state:
 if "q_start_time" not in st.session_state:
     st.session_state.q_start_time = time.time()
 if "question_durations" not in st.session_state:
-    # Pre-fill all questions with 0.0 — ensures every question always has an entry
     st.session_state.question_durations = {i: 0.0 for i in range(total_questions)}
 
-# Bug 3 fix — track wr/rw at the moment of each answer change
 if "wr_count" not in st.session_state:
-    st.session_state.wr_count = 0   # wrong → right changes
+    st.session_state.wr_count = 0
 if "rw_count" not in st.session_state:
-    st.session_state.rw_count = 0   # right → wrong changes
+    st.session_state.rw_count = 0
 
 supabase = get_client()
 
 # --- Behavior Classification ---
-# Bug 5 fix — function now correctly accepts all 8 parameters
-# Bug 6 fix — rte_score thresholds corrected to realistic range (0.1 – 3.0)
-def assign_behavior(avg_time, revision, navigation, accuracy, unattempted, wr_ratio, rw_ratio, rte_score):
+def assign_behavior(avg_time, revision, navigation, accuracy,
+                    unattempted, wr_ratio, rw_ratio, rte_score, time_variance):
 
-    # Disengaged — checked first, highest priority
+    # ── 🔴 DISENGAGED ─────────────────────────────────────────────────────
     if unattempted >= 4:
         return "Disengaged"
-    if avg_time < 4:
-        return "Disengaged"
-    if avg_time < 7 and accuracy < 0.45:
+
+    if avg_time < 3:
         return "Disengaged"
 
-    # Fast_Response
-    # rte_score < 0.75 means faster than 75% of cohort avg — realistic threshold
-    if avg_time < 8 and accuracy >= 0.75 and revision <= 3:
+    if avg_time < 6 and accuracy < 0.40 and revision <= 2:
+        return "Disengaged"
+
+    if rte_score > 1.2 and accuracy < 0.30:
+        return "Disengaged"
+
+    # ── 🟢 FAST_RESPONSE ──────────────────────────────────────────────────
+    if (avg_time < 8 and accuracy >= 0.80
+            and revision <= 3 and wr_ratio < 0.3):
         return "Fast_Response"
 
-    # High_Revision
-    # rte_score > 1.5 means took 50% longer than cohort — realistic threshold
-    if revision >= 5 and navigation > (total_questions + 2):
-        return "High_Revision"
-    if rw_ratio > 0.5 and rte_score > 1.5:
-        # User is changing correct answers to wrong ones AND taking very long
+    if (rte_score < 0.75 and accuracy >= 0.75
+            and unattempted == 0):
+        return "Fast_Response"
+
+    # ── 🟡 HIGH_REVISION ──────────────────────────────────────────────────
+    if (revision >= 5 and wr_ratio >= 0.4
+            and accuracy >= 0.60):
         return "High_Revision"
 
-    # Deliberative — default
+    if (rw_ratio > 0.4 and revision >= 4
+            and accuracy >= 0.50):
+        return "High_Revision"
+
+    if (navigation > 12 and revision >= 5
+            and accuracy >= 0.60):
+        return "High_Revision"
+
+    # ── 🔵 DELIBERATIVE ───────────────────────────────────────────────────
+    if (rte_score >= 1.0 and accuracy >= 0.60
+            and revision >= 1):
+        return "Deliberative"
+
+    if (avg_time >= 8 and accuracy >= 0.60
+            and rw_ratio <= 0.3 and time_variance > 10):
+        return "Deliberative"
+
     return "Deliberative"
 
 # --- Time Tracking ---
@@ -150,7 +169,6 @@ selected_answer = st.radio(
     key=f"radio_{q_index}"
 )
 
-# Bug 3 fix — wr/rw tracked here at change time, not at submit time
 if selected_answer is not None:
     if q_index in st.session_state.answers:
         old_answer = st.session_state.answers[q_index]
@@ -162,9 +180,9 @@ if selected_answer is not None:
             new_is_correct  = (selected_answer == correct_answer)
 
             if not old_was_correct and new_is_correct:
-                st.session_state.wr_count += 1   # wrong → right ✅
+                st.session_state.wr_count += 1
             elif old_was_correct and not new_is_correct:
-                st.session_state.rw_count += 1   # right → wrong ❌
+                st.session_state.rw_count += 1
 
     st.session_state.answers[q_index] = selected_answer
 
@@ -178,28 +196,24 @@ with col2:
 if st.button("Submit Quiz"):
     log_duration()
 
-    # ── Bug 1 & 2 fix — total_duration defined first, durations corrected,
-    #    then avg_time computed from corrected durations so both metrics
-    #    use the same data source ────────────────────────────────────────────
     total_duration = time.time() - st.session_state.quiz_start_time
 
     durations = [st.session_state.question_durations[i] for i in range(total_questions)]
 
-    # Free submit fix — if user never navigated, distribute time equally
+    # Free submit fix — distribute time equally if user never navigated
     if len([d for d in durations if d > 0]) <= 1:
         durations = [total_duration / total_questions] * total_questions
 
-   
     avg_time = sum(durations) / total_questions
 
-    # ── Bug 7 fix — NaN/Inf guard on time_variance ────────────────────────
-    raw_variance = np.var(durations)    # Σ(t_i - avg)² / N
+    # NaN/Inf guard on time_variance
+    raw_variance = np.var(durations)
     if np.isnan(raw_variance) or np.isinf(raw_variance):
         time_variance = 0.0
     else:
         time_variance = round(float(raw_variance), 2)
 
-    # ── Accuracy ──────────────────────────────────────────────────────────
+    # Accuracy
     correct_count     = 0
     unattempted_count = 0
     for i, q in enumerate(questions):
@@ -211,9 +225,7 @@ if st.button("Submit Quiz"):
 
     accuracy = correct_count / total_questions
 
-    # ── Bug 3 fix — wr_ratio & rw_ratio from tracked revision counts ──────
-    # wr_ratio = wrong→right changes / total revisions
-    # rw_ratio = right→wrong changes / total revisions
+    # wr_ratio & rw_ratio
     total_revisions = st.session_state.revision_count
     if total_revisions > 0:
         wr_ratio = round(float(st.session_state.wr_count) / total_revisions, 4)
@@ -222,16 +234,14 @@ if st.button("Submit Quiz"):
         wr_ratio = 0.0
         rw_ratio = 0.0
 
-    # ── Bug 4 fix — rte_score from real cohort avg, not hardcoded 30 ──────
-    # rte_score = avg_time / cohort_avg_time
-    # > 1.0 = slower than cohort, < 1.0 = faster than cohort
+    # rte_score from cohort avg
     cohort_avg = get_cohort_avg_time(supabase)
     if cohort_avg is not None and cohort_avg > 0:
         rte_score = round(float(avg_time) / cohort_avg, 4)
     else:
-        rte_score = 1.0   # neutral default — no cohort data yet
+        rte_score = 1.0
 
-    # ── Bug 5 fix — all 8 arguments passed correctly ──────────────────────
+    # ✅ Fix — time_variance now passed correctly
     behavior_label = assign_behavior(
         avg_time,
         st.session_state.revision_count,
@@ -240,10 +250,10 @@ if st.button("Submit Quiz"):
         unattempted_count,
         wr_ratio,
         rw_ratio,
-        rte_score
+        rte_score,
+        time_variance        # ← was missing before
     )
 
-    # All native Python types — prevents NULL in Supabase
     save_to_supabase(supabase, {
         "attempt_id":        str(st.session_state.attempt_id),
         "avg_time":          round(float(avg_time), 2),
