@@ -11,17 +11,10 @@ def get_client():
     key = st.secrets["SUPABASE_KEY"]
     return create_client(url, key)
 
-
-
 def save_to_supabase(supabase, row_dict):
     supabase.table("quiz_responses").insert(row_dict).execute()
 
 def get_cohort_avg_time(supabase):
-    """
-    Fetch mean avg_time from all previous attempts.
-    Used for RTE = avg_time / cohort_avg_time.
-    Returns None if no previous data exists.
-    """
     try:
         response = supabase.table("quiz_responses").select("avg_time").execute()
         times = [row["avg_time"] for row in response.data if row["avg_time"] is not None]
@@ -60,7 +53,6 @@ questions = [
 total_questions = len(questions)
 
 # --- Session State ---
-
 if "current_q" not in st.session_state:
     st.session_state.current_q = 0
 if "answers" not in st.session_state:
@@ -75,7 +67,6 @@ if "q_start_time" not in st.session_state:
     st.session_state.q_start_time = time.time()
 if "question_durations" not in st.session_state:
     st.session_state.question_durations = {i: 0.0 for i in range(total_questions)}
-
 if "wr_count" not in st.session_state:
     st.session_state.wr_count = 0
 if "rw_count" not in st.session_state:
@@ -87,48 +78,30 @@ supabase = get_client()
 def assign_behavior(avg_time, revision, navigation, accuracy,
                     unattempted, wr_ratio, rw_ratio, rte_score, time_variance):
 
-    # ── 🔴 DISENGAGED ─────────────────────────────────────────────────────
     if unattempted >= 4:
         return "Disengaged"
-
     if avg_time < 3:
         return "Disengaged"
-
     if avg_time < 6 and accuracy < 0.40 and revision <= 2:
         return "Disengaged"
-
     if rte_score > 1.2 and accuracy < 0.30:
         return "Disengaged"
 
-    # ── 🟢 FAST_RESPONSE ──────────────────────────────────────────────────
-    if (avg_time < 8 and accuracy >= 0.80
-            and revision <= 3 and wr_ratio < 0.3):
+    if (avg_time < 8 and accuracy >= 0.80 and revision <= 3 and wr_ratio < 0.3):
+        return "Fast_Response"
+    if (rte_score < 0.75 and accuracy >= 0.75 and unattempted == 0):
         return "Fast_Response"
 
-    if (rte_score < 0.75 and accuracy >= 0.75
-            and unattempted == 0):
-        return "Fast_Response"
-
-    # ── 🟡 HIGH_REVISION ──────────────────────────────────────────────────
-    if (revision >= 5 and wr_ratio >= 0.4
-            and accuracy >= 0.60):
+    if (revision >= 5 and wr_ratio >= 0.4 and accuracy >= 0.60):
+        return "High_Revision"
+    if (rw_ratio > 0.4 and revision >= 4 and accuracy >= 0.50):
+        return "High_Revision"
+    if (navigation > 12 and revision >= 5 and accuracy >= 0.60):
         return "High_Revision"
 
-    if (rw_ratio > 0.4 and revision >= 4
-            and accuracy >= 0.50):
-        return "High_Revision"
-
-    if (navigation > 12 and revision >= 5
-            and accuracy >= 0.60):
-        return "High_Revision"
-
-    # ── 🔵 DELIBERATIVE ───────────────────────────────────────────────────
-    if (rte_score >= 1.0 and accuracy >= 0.60
-            and revision >= 1):
+    if (rte_score >= 1.0 and accuracy >= 0.60 and revision >= 1):
         return "Deliberative"
-
-    if (avg_time >= 8 and accuracy >= 0.60
-            and rw_ratio <= 0.3 and time_variance > 10):
+    if (avg_time >= 8 and accuracy >= 0.60 and rw_ratio <= 0.3 and time_variance > 10):
         return "Deliberative"
 
     return "Deliberative"
@@ -173,9 +146,9 @@ if selected_answer is not None:
         if old_answer != selected_answer:
             st.session_state.revision_count += 1
 
-            correct_answer  = question["answer"]
+            correct_answer = question["answer"]
             old_was_correct = (old_answer == correct_answer)
-            new_is_correct  = (selected_answer == correct_answer)
+            new_is_correct = (selected_answer == correct_answer)
 
             if not old_was_correct and new_is_correct:
                 st.session_state.wr_count += 1
@@ -198,21 +171,18 @@ if st.button("Submit Quiz"):
 
     durations = [st.session_state.question_durations[i] for i in range(total_questions)]
 
-    # Free submit fix — distribute time equally if user never navigated
     if len([d for d in durations if d > 0]) <= 1:
         durations = [total_duration / total_questions] * total_questions
 
     avg_time = sum(durations) / total_questions
 
-    # NaN/Inf guard on time_variance
     raw_variance = np.var(durations)
     if np.isnan(raw_variance) or np.isinf(raw_variance):
         time_variance = 0.0
     else:
         time_variance = round(float(raw_variance), 2)
 
-    # Accuracy
-    correct_count     = 0
+    correct_count = 0
     unattempted_count = 0
     for i, q in enumerate(questions):
         if i in st.session_state.answers:
@@ -223,7 +193,6 @@ if st.button("Submit Quiz"):
 
     accuracy = correct_count / total_questions
 
-    # wr_ratio & rw_ratio
     total_revisions = st.session_state.revision_count
     if total_revisions > 0:
         wr_ratio = round(float(st.session_state.wr_count) / total_revisions, 4)
@@ -232,28 +201,21 @@ if st.button("Submit Quiz"):
         wr_ratio = 0.0
         rw_ratio = 0.0
 
-    # rte_score from cohort avg
-   cohort_avg = get_cohort_avg_time(supabase)
+    # ✅ FIXED RTE (ONLY CHANGE)
+    cohort_avg = get_cohort_avg_time(supabase)
 
-MIN_BASELINE = 8   # minimum realistic average time
-MAX_RTE = 2.5      # upper bound
-MIN_RTE = 0.3      # lower bound
+    MIN_BASELINE = 8
+    MAX_RTE = 2.5
+    MIN_RTE = 0.3
 
-if cohort_avg is None:
-    rte_score = 1.0
+    if cohort_avg is None:
+        rte_score = 1.0
+    else:
+        adjusted_avg = max(cohort_avg, MIN_BASELINE)
+        rte_score = avg_time / adjusted_avg
+        rte_score = max(MIN_RTE, min(rte_score, MAX_RTE))
+        rte_score = round(rte_score, 4)
 
-else:
-    # Prevent very small average
-    adjusted_avg = max(cohort_avg, MIN_BASELINE)
-
-    rte_score = avg_time / adjusted_avg
-
-    # Clamp values to realistic range
-    rte_score = max(MIN_RTE, min(rte_score, MAX_RTE))
-
-    rte_score = round(rte_score, 4)
-
-    # ✅ Fix — time_variance now passed correctly
     behavior_label = assign_behavior(
         avg_time,
         st.session_state.revision_count,
@@ -263,21 +225,20 @@ else:
         wr_ratio,
         rw_ratio,
         rte_score,
-        time_variance        # ← was missing before
+        time_variance
     )
 
     save_to_supabase(supabase, {
-       
-        "avg_time":          round(float(avg_time), 2),
-        "time_variance":     time_variance,
-        "revision_count":    int(st.session_state.revision_count),
-        "navigation_count":  int(st.session_state.navigation_count),
+        "avg_time": round(float(avg_time), 2),
+        "time_variance": time_variance,
+        "revision_count": int(st.session_state.revision_count),
+        "navigation_count": int(st.session_state.navigation_count),
         "unattempted_count": int(unattempted_count),
-        "accuracy":          round(float(accuracy), 2),
-        "wr_ratio":          wr_ratio,
-        "rw_ratio":          rw_ratio,
-        "rte_score":         rte_score,
-        "behavior_label":    str(behavior_label)
+        "accuracy": round(float(accuracy), 2),
+        "wr_ratio": wr_ratio,
+        "rw_ratio": rw_ratio,
+        "rte_score": rte_score,
+        "behavior_label": str(behavior_label)
     })
 
     st.success("Quiz Submitted Successfully!")
