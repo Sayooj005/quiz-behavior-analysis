@@ -11,8 +11,7 @@ def get_client():
     key = st.secrets["SUPABASE_KEY"]
     return create_client(url, key)
 
-def generate_attempt_id():
-    return str(uuid.uuid4())[:8].upper()
+
 
 def save_to_supabase(supabase, row_dict):
     supabase.table("quiz_responses").insert(row_dict).execute()
@@ -61,8 +60,7 @@ questions = [
 total_questions = len(questions)
 
 # --- Session State ---
-if "attempt_id" not in st.session_state:
-    st.session_state.attempt_id = generate_attempt_id()
+
 if "current_q" not in st.session_state:
     st.session_state.current_q = 0
 if "answers" not in st.session_state:
@@ -255,7 +253,7 @@ if st.button("Submit Quiz"):
     )
 
     save_to_supabase(supabase, {
-        "attempt_id":        str(st.session_state.attempt_id),
+       
         "avg_time":          round(float(avg_time), 2),
         "time_variance":     time_variance,
         "revision_count":    int(st.session_state.revision_count),
