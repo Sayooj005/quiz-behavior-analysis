@@ -233,11 +233,25 @@ if st.button("Submit Quiz"):
         rw_ratio = 0.0
 
     # rte_score from cohort avg
-    cohort_avg = get_cohort_avg_time(supabase)
-    if cohort_avg is not None and cohort_avg > 0:
-        rte_score = round(float(avg_time) / cohort_avg, 4)
-    else:
-        rte_score = 1.0
+   cohort_avg = get_cohort_avg_time(supabase)
+
+MIN_BASELINE = 8   # minimum realistic average time
+MAX_RTE = 2.5      # upper bound
+MIN_RTE = 0.3      # lower bound
+
+if cohort_avg is None:
+    rte_score = 1.0
+
+else:
+    # Prevent very small average
+    adjusted_avg = max(cohort_avg, MIN_BASELINE)
+
+    rte_score = avg_time / adjusted_avg
+
+    # Clamp values to realistic range
+    rte_score = max(MIN_RTE, min(rte_score, MAX_RTE))
+
+    rte_score = round(rte_score, 4)
 
     # ✅ Fix — time_variance now passed correctly
     behavior_label = assign_behavior(
